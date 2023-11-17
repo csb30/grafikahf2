@@ -31,7 +31,13 @@
 // Tudomasul veszem, hogy a forrasmegjeloles kotelmenek megsertese eseten a hazifeladatra adhato pontokat
 // negativ elojellel szamoljak el es ezzel parhuzamosan eljaras is indul velem szemben.
 //=============================================================================================
+#include <iostream>
 #include "framework.h"
+
+int current_time=1;
+std::vector<float> star, red, green, blue;
+float max=0;
+bool max_calculated = false;
 
 //raytrace.cpp
 struct Material {
@@ -57,6 +63,7 @@ protected:
     Material * material;
 public:
     virtual Hit intersect(const Ray& ray) = 0;
+    virtual void move(int t) = 0;
 };
 
 struct Sphere : public Intersectable {
@@ -86,6 +93,19 @@ struct Sphere : public Intersectable {
         hit.normal = (hit.position - center) * (1.0f / radius);
         hit.material = material;
         return hit;
+    }
+
+    void move(int t){
+        if(t-current_time==0) return;
+        //Hubble
+        for(int i=0; i<abs(t-current_time); i++){
+            if (t-current_time>0){
+                center=center + 0.1*center;
+            }
+            else {
+                center=center - 0.1*center;
+            }
+        }
     }
 };
 
@@ -126,18 +146,25 @@ class Scene {
     vec3 La; //ambiens feny
 public:
     void build() {
-        vec3 eye = vec3(0, 0, 2), vup = vec3(0, 1, 0), lookat = vec3(0, 0, 0);
-        float fov = 45 * M_PI / 180;
+        float fov = 4.0f * M_PI / 180;
+        vec3 eye = vec3(0, 0, -0.5f/(tan(fov / 2.0f))), vup = vec3(0, 1, 0), lookat = vec3(0, 0, 0);
+        //eye.z = 1/tan(fov/2)
         camera.set(eye, lookat, vup, fov);
 
         La = vec3(1.0f, 1.0f, 1.0f);
         //vec3 lightDirection(1, 1, 1), Le(2, 2, 2);
         //lights.push_back(new Light(lightDirection, Le));
 
-        vec3 kd(0.3f, 0.2f, 0.1f), ks(2, 2, 2);
-        Material * material = new Material(kd, ks, 50);
-        for (int i = 0; i < 100; i++)
-            objects.push_back(new Sphere(vec3(rnd() - 0.5f, rnd() - 0.5f, rnd() - 0.5f), 0.07f, material));
+
+        vec3 kd(1.0f, 1.0f, 1.0f), ks(2, 2, 2);
+        Material *material = new Material(kd, ks, 50);
+        //70-400
+        for (int i = 0; i < 100; i++) {
+            float z = rnd()*330 + 70;
+            float x = (rnd()*2-1)*tan(fov/2)*z;
+            float y = (rnd()*2-1)*tan(fov/2)*z;
+            objects.push_back(new Sphere(vec3(x, y, z), 0.5f, material));
+        }
     }
 
     void render(std::vector<vec4>& image) {
@@ -168,7 +195,31 @@ public:
     vec3 trace(Ray ray, int depth = 0) {
         Hit hit = firstIntersect(ray);
         if (hit.t < 0) return vec3(0,0,0);
-        vec3 outRadiance = hit.material->ka * La * (3-hit.t);  //numerikus integralos magic
+        vec3 hermite_color = (0,0,0);
+        //color
+        float c = 299792.458 * 60 * 60; //km/h
+        float v = 0.1f*hit.t * 1000 / 365 / 24;
+        for(int i=400; i<=700; i++){
+            int idx=i-400;
+            int wave = round(float(i) * (c+v) / c);
+            hermite_color.x += star[wave-250]*red[idx];
+            hermite_color.y += star[wave-250]*green[idx];
+            hermite_color.z += star[wave-250]*blue[idx];
+        }
+
+        //normalize
+        if (!max_calculated) {
+            max = hermite_color.x;
+            if (max < hermite_color.y) max = hermite_color.y;
+            if (max < hermite_color.z) max = hermite_color.z;
+            max_calculated = true;
+        }
+        hermite_color.x = 5.0f * hermite_color.x / max;
+        hermite_color.y = 5.0f * hermite_color.y / max;
+        hermite_color.z = 5.0f * hermite_color.z / max;
+
+        //vec3 outRadiance = hit.material->ka * La;
+        vec3 outRadiance = hermite_color * La * (1-(hit.t-70)/660);
         for (Light * light : lights) {
             Ray shadowRay(hit.position + hit.normal * epsilon, light->direction);
             float cosTheta = dot(hit.normal, light->direction);
@@ -180,6 +231,13 @@ public:
             }
         }
         return outRadiance;
+    }
+
+    void moveObjects(int t){
+        for(int i = 0; i < objects.size(); i++){
+            objects[i]->move(t);
+        }
+        current_time=t;
     }
 };
 
@@ -253,9 +311,62 @@ public:
 
 FullScreenTexturedQuad * fullScreenTexturedQuad;
 
+float hermite(float p0, float p1, float t0, float t1, float t){
+    float a3 = (2.0f*(p0-p1)) / pow(t1-t0,3);
+    float a2 = (3.0f*(p1-p0)) / pow(t1-t0, 2);
+    float a0 = p0;
+    return a3*pow(t-t0,3) + a2*pow(t-t0,2) + a0;
+}
+
 
 // Initialization, create an OpenGL context
 void onInitialization() {
+
+    //150-1600
+
+    //star
+    for (int i=150; i<450; i++){
+        star.push_back(hermite(0,1,150,450,float(i)));
+    }
+    for (int i=450; i<=1600; i++){
+        star.push_back(hermite(1,0.1,450,1600,float(i)));
+    }
+
+    //400 - 700
+
+    //red
+    for(int i=400; i<500; i++){
+        red.push_back(hermite(0,-0.2,400,500,float(i)));
+    }
+    for(int i=500; i<600; i++){
+        red.push_back(hermite(-0.2,2.5,500,600,float(i)));
+    }
+    for(int i=600; i<=700; i++){
+        red.push_back(hermite(2.5,0,600,700,float(i)));
+    }
+
+    //green
+    for(int i=400; i<500; i++){
+        green.push_back(hermite(0,-0.1,400,500,float(i)));
+    }
+    for(int i=500; i<600; i++){
+        green.push_back(hermite(-0.1,1.2,500,600,float(i)));
+    }
+    for(int i=600; i<=700; i++){
+        green.push_back(hermite(1.2,0,600,700,float(i)));
+    }
+
+    //blue
+    for(int i=400; i<460; i++){
+        blue.push_back(hermite(0,1,400,460,float(i)));
+    }
+    for(int i=460; i<520; i++){
+        blue.push_back(hermite(1,0,460,520,float(i)));
+    }
+    for(int i=520; i<=700; i++){
+        blue.push_back(0);
+    }
+
     glViewport(0, 0, windowWidth, windowHeight);
     scene.build();
 
@@ -282,7 +393,53 @@ void onDisplay() {
 
 // Key of ASCII code pressed
 void onKeyboard(unsigned char key, int pX, int pY) {
-	if (key == 'd') glutPostRedisplay();         // if d, invalidate display, i.e. redraw
+    bool modified = false;
+    switch(key){
+        case '0':
+            scene.moveObjects(2);
+            modified=true;
+            break;
+        case '1':
+            scene.moveObjects(4);
+            modified=true;
+            break;
+        case '2':
+            scene.moveObjects(6);
+            modified=true;
+            break;
+        case '3':
+            scene.moveObjects(8);
+            modified=true;
+            break;
+        case '4':
+            scene.moveObjects(10);
+            modified=true;
+            break;
+        case '5':
+            scene.moveObjects(12);
+            modified=true;
+            break;
+        case '6':
+            scene.moveObjects(14);
+            modified=true;
+            break;
+        case '7':
+            scene.moveObjects(16);
+            modified=true;
+            break;
+        case '8':
+            scene.moveObjects(18);
+            modified=true;
+            break;
+        case '9':
+            scene.moveObjects(20);
+            modified=true;
+            break;
+    }
+    if(modified) {
+        fullScreenTexturedQuad->renderScreen();
+        glutPostRedisplay();
+    }
 }
 
 // Key of ASCII code released
